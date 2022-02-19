@@ -2,3 +2,4 @@
 rs-concurrent-queries.code-workspace
 __pycache__/
 ./vscode/
+configs/
