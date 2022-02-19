@@ -1,0 +1,6 @@
+multiprocess ~= 0.70.0
+python-dotenv ~= 0.19.0
+pytest-timeit ~= 0.3.0
+Columnar ~= 1.4.1
+numpy ~= 1.20.3
+argparse ~= 1.4.0

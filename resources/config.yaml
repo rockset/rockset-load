@@ -1,0 +1,29 @@
+test_name: Customer
+target:
+    api_server:  http://api.rs2.usw2.rockset.com
+    overrides:
+query_set:
+    - name: samples
+      simulated_users: 1 
+      iterations: 1
+      iterim_delay: 0
+      queries:
+        - name: Count 1
+          lambda: v1/orgs/self/ws/patrick/lambdas/order_asset_lookup/tags/latest
+          parameters:
+            - name: order_id
+              type: int
+              value: 0
+          paginate: False
+          initial_paginate_response_doc_count: 1000
+          drop_results: False
+        - name: Count 2
+          sql: >+
+            SELECT
+                *
+            FROM 
+                _events
+          parameters: []
+          paginate: False
+          initial_paginate_response_doc_count: 1000
+          drop_results: False
