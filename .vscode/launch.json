@@ -1,0 +1,20 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "main - default config",
+            "type": "python",
+            "request": "launch",
+            "program": "rsload.py",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "main - help",
+            "type": "python",
+            "request": "launch",
+            "program": "rsload.py",
+            "console": "integratedTerminal",
+            "args":["--help" ]
+        }
+    ]
+}

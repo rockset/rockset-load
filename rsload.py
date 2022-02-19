@@ -294,8 +294,8 @@ def display_summary(config, summary):
 if __name__ == "__main__":
     options = parse_args()
     config = load_config(options)
-#    query_set_results = run_queryset(config['target'], config['query_set'][0])
-#    obfuscate_apikey(config)
-#    display_qs_results(config, query_set_results)
-#    summary = summarize_qs_results(config, query_set_results)
-#    display_summary(config, summary)
+    query_set_results = run_queryset(config['target'], config['query_set'][0])
+    obfuscate_apikey(config)
+    display_qs_results(config, query_set_results)
+    summary = summarize_qs_results(config, query_set_results)
+    display_summary(config, summary)
