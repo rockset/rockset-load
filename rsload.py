@@ -10,14 +10,21 @@ from datetime import datetime
 def parse_args():
     options = {}
     parser = argparse.ArgumentParser(description='Rockset Load Tester.')
+    parser.add_argument('-v', '--verbose', help='print information to the screen', action="store_true")
+    parser.add_argument('--nolog', help='suppresses output log', action="store_true")
     parser.add_argument('-c', '--config', help='yaml configuration file with test parameters', default='./resources/config.yaml')
+    parser.add_argument('-o', '--output_dir', help='directory where output is writen', default='./history')
+
     args = parser.parse_args()
     options['config_file'] = args.config
+    options['verbose'] = args.verbose
+    options['output_dir'] = args.output_dir
 
     # TODO Make the history files configurable
     options['history_dir'] = './history'
     options['details_name'] = 'query_details.csv'
     options['qs_summary_name'] = 'query_set_summaries.csv'
+    options['log_output'] = not args.nolog
     return options
 
 def load_config(options):
@@ -182,6 +189,8 @@ def run_query(query_num, user_num, target, query):
 
     if qryResopnse.status_code == 408:
         result['status'] = 'timeout'
+    elif qryResopnse.status_code == 429:
+        result['status'] = 'exhausted'
     elif qryResopnse.status_code != 200:
         result['status'] = 'error'
         result['message'] = f'{qryResopnse.reason}. {qryResopnse.text}'
@@ -234,6 +243,9 @@ def display_qs_results(config, results):
         elif result['status'] == 'timeout':
             line.extend(['','','','',''])  # blank values for timings
             line.append('Query timed out')
+        elif result['status'] == 'exhausted':
+            line.extend(['','','','',''])  # blank values for timings
+            line.append('Resources exhausted')
         data.append(line)
     
     table = columnar(data, headers = headers, patterns = patterns, no_borders=True, justify=justify, preformatted_headers=True)
@@ -262,6 +274,20 @@ def summarize_qs_results(config, results):
                 warning['query_num'] = result['query_num']
                 warning['name'] = result['name']
                 warning['message'] = f"Errored with message: {result['message']}"
+                warnings.append(warning)
+        elif result['status'] == 'timeout':
+                clean = False
+                warning = {}
+                warning['query_num'] = result['query_num']
+                warning['name'] = result['name']
+                warning['message'] = 'Query timed out'
+                warnings.append(warning)
+        elif result['status'] == 'exhausted':
+                clean = False
+                warning = {}
+                warning['query_num'] = result['query_num']
+                warning['name'] = result['name']
+                warning['message'] = 'Resources exhausted'
                 warnings.append(warning)
     
     return {
@@ -313,18 +339,18 @@ def display_qs_summary(config, summary):
         print(table)   
 
 def validate_history_dir(options):
-    history_dir = options['history_dir']
+    output_dir = options['output_dir']
     # Make sure the details file exists
-    history_exists = os.path.exists(history_dir)
+    history_exists = os.path.exists(output_dir)
     if not history_exists:
-        os.makedirs(history_dir)
+        os.makedirs(output_dir)
 
 def log_query_results(options, config, query_results):
     validate_history_dir(options)
-    history_dir = options['history_dir']
+    output_dir = options['output_dir']
     # Make sure the history files exists
     file_name = options['details_name']
-    file_path = history_dir + '/' + file_name
+    file_path = output_dir + '/' + file_name
     file_exists = os.path.exists(file_path)
     if not file_exists:
         headers = [
@@ -374,16 +400,17 @@ def log_query_results(options, config, query_results):
                 line.append(result['message'])
             elif result['status'] == 'timeout':
                 line.append( 'Query timed out')
-
+            elif result['status'] == 'exhausted':
+                line.append( 'Resoruces exhausted')
             writer.writerow(line)
 
 def log_qs_summary(options, config, summary):
     validate_history_dir(options)
-    history_dir = options['history_dir']
+    output_dir = options['output_dir']
 
     # Make sure the history files exists
     file_name = options['qs_summary_name'] 
-    file_path = history_dir + '/' + file_name
+    file_path = output_dir + '/' + file_name
     file_exists = os.path.exists(file_path)
     if not file_exists:
         headers = [
@@ -424,10 +451,14 @@ def log_qs_summary(options, config, summary):
 if __name__ == "__main__":
     options = parse_args()
     config = load_config(options)
+    verbose = options['verbose']
+    log_output = options['log_output']
     query_results = run_queryset(config['target'], config['query_set'][0], 1)
     obfuscate_apikey(config)
-    display_qs_results(config, query_results)
-    log_query_results(options, config, query_results)
     query_set_summary = summarize_qs_results(config, query_results)
-    log_qs_summary(options, config, query_set_summary)
-    display_qs_summary(config, query_set_summary)
+    if verbose:
+        display_qs_results(config, query_results)
+        display_qs_summary(config, query_set_summary)
+    if log_output:
+        log_query_results(options, config, query_results)
+        log_qs_summary(options, config, query_set_summary)

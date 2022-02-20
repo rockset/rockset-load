@@ -23,6 +23,18 @@ ROCKSET_APIKEY=<insert your key>
 
 ```
 
+## Usage
+```
+optional arguments:
+  -h, --help            show this help message and exit
+  -v, --verbose         print information to the screen
+  --nolog NOLOG         suppresses output log
+  -c CONFIG, --config CONFIG
+                        yaml configuration file with test parameters  (defaults to ./resources/config.yaml)
+  -o OUTPUT_DIR, --output_dir OUTPUT_DIR
+                        directory where output is writen (defaults to ./history)
+```
+
 ## Configuration File
 You may specify a test configuration file using the `-c` or `--config` options on the command line. The default configuration file is `./resources/config.yaml`
 
