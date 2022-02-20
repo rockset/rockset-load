@@ -1,4 +1,4 @@
-import os, yaml, requests, time
+import os, yaml, requests, time, uuid, csv
 import argparse
 import numpy as np
 from multiprocessing.pool import Pool
@@ -14,6 +14,10 @@ def parse_args():
     args = parser.parse_args()
     options['config_file'] = args.config
 
+    # TODO Make the history files configurable
+    options['history_dir'] = './history'
+    options['details_name'] = 'query_details.csv'
+    options['qs_summary_name'] = 'query_set_summaries.csv'
     return options
 
 def load_config(options):
@@ -69,14 +73,20 @@ def load_config(options):
     config['target']['concurrent_queries_limit'] = orgResponseData['concurrent_queries_limit'] 
     config['target']['concurrent_query_execution_limit'] = orgResponseData['concurrent_query_execution_limit']
 
-    # Add the test start time to the config
     stats = {}
+ 
+   # Add the test start time  and test id to the config stats
     stats['test_start'] = datetime.now()
+    stats['run_id'] = uuid.uuid4()
     config['stats'] = stats
+
+    # Ensure the test name is a valid string
+    if not 'test_name' in config:
+        config['test_name'] = 'unnamed'
 
     return config
 
-def run_queryset(target, query_set):
+def run_queryset(target, query_set, query_set_num):
     results = {}
     query_count = len(query_set['queries'])
     query_results = [None] * query_count
@@ -102,6 +112,7 @@ def run_queryset(target, query_set):
     
     results['query_results'] = query_results
     results['query_set_name'] = query_set['name']
+    results['query_set_num'] = query_set_num
     return results
 
 def run_query(query_num, user_num, target, query):
@@ -118,7 +129,7 @@ def run_query(query_num, user_num, target, query):
     if 'name' in query:
         result['name'] = query['name']
     else:
-        result['name'] = '(unnamed)'
+        result['name'] = 'unnamed'
 
     # Run the query
     payload = {}
@@ -176,12 +187,12 @@ def run_query(query_num, user_num, target, query):
         result['message'] = f'{qryResopnse.reason}. {qryResopnse.text}'
     else:
         result['status'] = 'success'
-        result['round_trip_time_ms'] = round((end - start) * 1000)
+        result['round_trip_ms'] = round((end - start) * 1000)
         response_data = qryResopnse.json()
-        result['server_time_ms'] = response_data['stats']['elapsed_time_ms']
-        result['queued_time_ns'] = round(response_data['stats']['throttled_time_micros'])
-        result['query_time_ms'] = round(result['server_time_ms'] - (result['queued_time_ns'] /1000))
-        result['network_time_ms'] = result['round_trip_time_ms'] - result['server_time_ms']
+        result['server_ms'] = response_data['stats']['elapsed_time_ms']
+        result['queued_ns'] = round(response_data['stats']['throttled_time_micros'])
+        result['query_ms'] = round(result['server_ms'] - (result['queued_ns'] /1000))
+        result['network_ms'] = result['round_trip_ms'] - result['server_ms']
         if drop_results:
           result['row_count'] = 'dropped'
         else:
@@ -211,10 +222,10 @@ def display_qs_results(config, results):
         line.append(result['name'])
         line.append(result['status'])
         if result['status'] == 'success':
-            line.append(result['round_trip_time_ms'])
-            line.append(result['query_time_ms'])
-            line.append(round(result['queued_time_ns']/1000))
-            line.append(result['network_time_ms'])
+            line.append(result['round_trip_ms'])
+            line.append(result['query_ms'])
+            line.append(round(result['queued_ns']/1000))
+            line.append(result['network_ms'])
             line.append(result['row_count'])
             line.append('')  # no error message
         elif result['status'] == 'error':
@@ -231,19 +242,22 @@ def display_qs_results(config, results):
 def summarize_qs_results(config, results):
     total, query, queued, network = 0,0,0,0 
     warnings = []
+    clean = True
     for result in results['query_results']:
         if result['status'] == 'success':
-            total += result['round_trip_time_ms']
-            query += result['query_time_ms']
-            queued += round(result['queued_time_ns']/1000)
-            network += result['network_time_ms']
+            total += result['round_trip_ms']
+            query += result['query_ms']
+            queued += round(result['queued_ns']/1000)
+            network += result['network_ms']
             if result['row_count'] == 0:
+                clean = False
                 warning = {}
                 warning['query_num'] = result['query_num']
                 warning['name'] = result['name']
                 warning['message'] = 'Returned no rows'
                 warnings.append(warning)
         elif result['status'] == 'error':
+                clean = False
                 warning = {}
                 warning['query_num'] = result['query_num']
                 warning['name'] = result['name']
@@ -251,30 +265,38 @@ def summarize_qs_results(config, results):
                 warnings.append(warning)
     
     return {
-        'total': total,
-        'query': query,
-        'queued': queued,
-        'network': network,
-        'warnings': warnings
+        'qs_name': results['query_set_name'],
+        'qs_num': results['query_set_num'],
+        'total_ms': total,
+        'query_ms': query,
+        'queued_ms': queued,
+        'network_ms': network,
+        'warnings': warnings,
+        'clean': clean
     }
 
-def display_summary(config, summary):
+def display_qs_summary(config, summary):
     # Display the test parameters
-    headers = ['Test', 'Started', 'VI', 'Agg Par', 'CQEL', 'CQL', 'Total (ms)', 'Query (ms)', 'Queued (ms)', 'Network (ms)']
+    headers = ['Test', 'Started', 'Clean', 'Total (ms)', 'Query (ms)', 'Queued (ms)', 'Network (ms)', 'VI', 'Agg Par', 'CQEL', 'CQL']
     justify = ['l','c','c', 'r', 'r', 'r', 'r', 'r', 'r', 'r']
+    patterns = [
+      ('False', lambda text: style(text, fg='red')),
+      ('True', lambda text: style(text, fg='green'))
+    ]
     data = [[
         config['test_name'],
         config['stats']['test_start'],
+        summary['clean'],
+        summary['total_ms'],
+        summary['query_ms'],
+        summary['queued_ms'],
+        summary['network_ms'],
         config['target']['vi_size'], 
         config['target']['aggregator_parallelism'], 
         config['target']['concurrent_query_execution_limit'],
-        config['target']['concurrent_queries_limit'],
-        summary['total'],
-        summary['query'],
-        summary['queued'],
-        summary['network']
+        config['target']['concurrent_queries_limit']
         ]]
-    table = columnar(data, headers = headers, justify = justify, no_borders=True, preformatted_headers=True)
+    table = columnar(data, headers = headers, patterns = patterns, justify = justify, no_borders=True, preformatted_headers=True)
     print(table)    
 
     if len(summary['warnings']) > 0:
@@ -290,12 +312,122 @@ def display_summary(config, summary):
         table = columnar(data, headers = headers, no_borders=True, preformatted_headers=True)
         print(table)   
 
+def validate_history_dir(options):
+    history_dir = options['history_dir']
+    # Make sure the details file exists
+    history_exists = os.path.exists(history_dir)
+    if not history_exists:
+        os.makedirs(history_dir)
+
+def log_query_results(options, config, query_results):
+    validate_history_dir(options)
+    history_dir = options['history_dir']
+    # Make sure the history files exists
+    file_name = options['details_name']
+    file_path = history_dir + '/' + file_name
+    file_exists = os.path.exists(file_path)
+    if not file_exists:
+        headers = [
+            'test_name', 'run_id', 'test_start', 'query_name', 'query_num', 'status', 'round_trip_ms', 'server_ms', 'queued_ms', 'query_ms', 'network_ms', 'row_count',
+            'vi_size', 'agg_par', 'cqel', 'cel',
+            'error'
+        ]
+        with open(file_path, 'wt') as new_details:
+            writer = csv.writer(new_details, delimiter = ',')
+            writer.writerow(headers)
+
+    test_name = config['test_name']
+    run_id = config['stats']['run_id']
+    test_start = config['stats']['test_start']
+
+    # Add detail records to the details file
+    with open(file_path, 'at') as new_details:
+        writer = csv.writer(new_details, delimiter = ',')
+        for result in query_results['query_results']:
+            line = []
+            line.append(test_name)
+            line.append(run_id)
+            line.append(test_start)
+            # Need to add query set identification
+            line.append(result['name'])
+            line.append(result['query_num'])
+            line.append(result['status'])
+            if result['status'] == 'success':
+                line.append(result['round_trip_ms'])
+                line.append(result['server_ms'])
+                line.append(result['queued_ns'])
+                line.append(result['query_ms'])
+                line.append(result['network_ms'])
+                if result['row_count'] == 'dropped':
+                    line.append(None)
+                else:
+                    line.append(result['row_count'])
+            else: # non successful query
+                line.extend([None,None,None,None,None,None])
+
+            line.append(config['target']['vi_size'])
+            line.append(config['target']['aggregator_parallelism'])
+            line.append(config['target']['concurrent_query_execution_limit'])            
+            line.append(config['target']['concurrent_queries_limit'])
+
+            if result['status'] == 'error':
+                line.append(result['message'])
+            elif result['status'] == 'timeout':
+                line.append( 'Query timed out')
+
+            writer.writerow(line)
+
+def log_qs_summary(options, config, summary):
+    validate_history_dir(options)
+    history_dir = options['history_dir']
+
+    # Make sure the history files exists
+    file_name = options['qs_summary_name'] 
+    file_path = history_dir + '/' + file_name
+    file_exists = os.path.exists(file_path)
+    if not file_exists:
+        headers = [
+            'test_name', 'run_id','test_start','qs_name', 'qs_num', 'clean', 'total_ms', 'query_ms', 'queued_ms', 'network_ms',
+            'vi_size', 'agg_par', 'cqel', 'cel'
+        ]
+        with open(file_path, 'wt') as new_summary:
+            writer = csv.writer(new_summary, delimiter = ',')
+            writer.writerow(headers)
+
+    test_name = config['test_name']
+    run_id = config['stats']['run_id']
+    test_start = config['stats']['test_start']
+    query_set_num = summary['qs_num']
+
+    # Add detail records to the details file
+    with open(file_path, 'at') as new_details:
+        writer = csv.writer(new_details, delimiter = ',')
+        line = []
+        line.append(test_name)
+        line.append(run_id)
+        line.append(test_start)
+        line.append(summary['qs_name'])
+        line.append(summary['qs_num'])
+        line.append(summary['clean'])
+        line.append(summary['total_ms'])
+        line.append(summary['query_ms'])
+        line.append(summary['queued_ms'])
+        line.append(summary['network_ms'])
+        line.append(config['target']['vi_size'])
+        line.append(config['target']['aggregator_parallelism'])
+        line.append(config['target']['concurrent_query_execution_limit'])            
+        line.append(config['target']['concurrent_queries_limit'])
+
+        writer.writerow(line)
+
 
 if __name__ == "__main__":
     options = parse_args()
     config = load_config(options)
-    query_set_results = run_queryset(config['target'], config['query_set'][0])
+    query_results = run_queryset(config['target'], config['query_set'][0], 1)
     obfuscate_apikey(config)
-    display_qs_results(config, query_set_results)
-    summary = summarize_qs_results(config, query_set_results)
-    display_summary(config, summary)
+    display_qs_results(config, query_results)
+    log_query_results(options, config, query_results)
+    query_set_summary = summarize_qs_results(config, query_results)
+    log_qs_summary(options, config, query_set_summary)
+    display_qs_summary(config, query_set_summary)

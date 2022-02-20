@@ -1,5 +1,7 @@
 .env
 rs-concurrent-queries.code-workspace
+launch.json
 __pycache__/
 ./vscode/
 configs/
+history/

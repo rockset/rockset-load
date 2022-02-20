@@ -35,6 +35,8 @@ It is best practice to name all of these elements in the configuration file:
 
 Naming everything sensibly is important for understanding the output since some information is reported for individual queries and some is reported as summarized for multilpe queries.
 
+If you only have a single query set as part of the test, it's likely your `test_name` and `query_set[0].name` will be the same or similar.
+
 
 
 ## Query Sets
