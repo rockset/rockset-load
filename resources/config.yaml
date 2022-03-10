@@ -1,6 +1,7 @@
 test_name: Customer
 target:
   api_server:  api.rs2.usw2.rockset.com
+  iterations: 1
   execution_mode: serial
   overrides:
 queries:
