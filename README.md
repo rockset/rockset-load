@@ -30,9 +30,9 @@ optional arguments:
   -v, --verbose         print information to the screen
   --nolog NOLOG         suppresses output log
   -c CONFIG, --config CONFIG
-                        yaml configuration file with test parameters  (defaults to ./resources/config.yaml)
+                        yaml configuration file with test parameters  
   -o OUTPUT_DIR, --output_dir OUTPUT_DIR
-                        directory where output is writen (defaults to ./history)
+                        directory where output is writen 
 ```
 
 ## Configuration File
@@ -42,23 +42,19 @@ You may specify a test configuration file using the `-c` or `--config` options o
 ## Naming
 It is best practice to name all of these elements in the configuration file:
 - the overall test in `test_name`
-- each query set in `query_set[].name`
-- each query in a query set in `query_set[].queries[].name`
+- each query in a query set in `queries[].name`
 
 Naming everything sensibly is important for understanding the output since some information is reported for individual queries and some is reported as summarized for multilpe queries.
 
-If you only have a single query set as part of the test, it's likely your `test_name` and `query_set[0].name` will be the same or similar.
+If you only have a single query set as part of the test, it's likely your `test_name` and `queries[0].name` will be the same or similar.
 
 
 
-## Query Sets
-A query set (`query_set`) is a list of queries that you want to execute concurrently. You may have multiple query sets - all will (currently) run concurrently. Having mutilpe query sets is unlikely, but supported.
+## Queries
+The query set (`queries`) is a list of queries that you want to execute as a logical group. 
 
-
-You can specify multilpe queries for each query set, using yaml notation, under the `query_set[].queries` attribute.
+You can specify multilpe queries for each query set, using yaml notation, under the `queries` attribute.
 Information about the exectuion of each query will be displayed as well as a summary of the time taken to execute all queries in the query set.
-
-Currently there is no support for executing queries in a query set serially, but that is planned.
 
 You can mix `sql` queries and `lambda` queries in a query set, but each query requires one or the other value to be set.
 
@@ -71,24 +67,14 @@ This example shows using SQL. The SQL code is specified using the `sql` attribut
 test_name: SQL Sample
 target:
     api_server:  api.rs2.usw2.rockset.com
-query_set:
-    - name: sample 1
-      queries:
-        - name: Count 1
-          sql: >+
-            SELECT
-                *
-            FROM 
-                _events
-    - name: sample 2
-      queries:
-        - name: Count 2
-          sql: >+
-            SELECT
-                *
-            FROM 
-                _events
-
+    execution_mode: serial
+queries:
+  - name: Count 1
+    sql: >+
+      SELECT
+          *
+      FROM 
+          _events
 ```
 
 
@@ -104,99 +90,108 @@ Please note that 'drop_results' is currently not supported when using query lamb
 test_name: QL Sample
 target:
     api_server:  api.rs2.usw2.rockset.com
-query_set:
-    - name: samples
-      queries:
-        - name: Count 1
-          lambda: v1/orgs/self/ws/test/lambdas/order_asset_lookup/tags/latest
-          parameters:
-            - name: order_id
-              type: int
-              value: 0
+queries:
+  - name: Count 1
+    lambda: v1/orgs/self/ws/test/lambdas/order_asset_lookup/tags/latest
+    parameters:
+      - name: order_id
+        type: int
+        value: 0
  ```
 
 ## Query Options
 
-- parameters
 
-Parameters may be specified for both `sql` and `lambda` queries. 
-If using parameters, they must be specified correctly in yaml, and, as such, cannot be directly copied from the Rockset console example.
+- `parameters`
 
-```
-test_name: parameter sample
-target:
-    api_server:  api.rs2.usw2.rockset.com
-query_set:
-    - name: samples
-      queries:
-        - name: Count 1
-          lambda: v1/orgs/self/ws/test/lambdas/order_asset_lookup/tags/latest
-          parameters:
-            - name: order_id
-              type: int
-              value: 0
+  Parameters may be specified for both `sql` and `lambda` queries. 
+  If using parameters, they must be specified correctly in yaml, and, as such, cannot be directly copied from the Rockset console example.
 
-```
+  ```
+  test_name: parameter sample
+  target:
+      api_server:  api.rs2.usw2.rockset.com
+  query_sets:
+      - name: samples
+        queries:
+          - name: Count 1
+            lambda: v1/orgs/self/ws/test/lambdas/order_asset_lookup/tags/latest
+            parameters:
+              - name: order_id
+                type: int
+                value: 0
 
-- pagination
+  ```
 
-You can enable pagination and configure the number of docs in the initial response as part of simulating the performance of a query that would use pagination in the wild. This also allows you to limit the number of documents returned with any query
+- `paginate`
 
-Inside the configuration of each query, you can enable pagination as follows:
+  You can enable pagination and configure the number of docs in the initial response as part of simulating the performance of a query that would use pagination in the wild. This also allows you to limit the number of documents returned with any query
 
-```
-test_name: pagination sample
-target:
-    api_server:  api.rs2.usw2.rockset.com
-query_set:
-    - name: samples
-      queries:
-        - name: test 1
-          sql: >+
-            SELECT
-                *
-            FROM 
-                _events
-          paginate: True
-          initial_paginate_response_doc_count: 1000
+  Inside the configuration of each query, you can enable pagination as follows:
 
-```
+  ```
+  test_name: pagination sample
+  target:
+      api_server:  api.rs2.usw2.rockset.com
+  query_sets:
+      - name: samples
+        queries:
+          - name: test 1
+            sql: >+
+              SELECT
+                  *
+              FROM 
+                  _events
+            paginate: True
+            initial_paginate_response_doc_count: 1000
 
-- drop results
+  ```
 
-You can configure a specific query to drop its results and avoid sending the result set back across the network to the client.  This feature is currently not supported when using `lambda` queries.
+- `drop_results`
 
-```
-test_name: drop results sample
-target:
-    api_server:  api.rs2.usw2.rockset.com
-query_set:
-    - name: samples
-      queries:
-        - name: Count 1
-          sql: >+
-            SELECT
-                *
-            FROM 
-                _events
-          drop_results: True
-```
+  You can configure a specific query to drop its results and avoid sending the result set back across the network to the client.  This feature is not currently supported for `lambda` queries.
 
-## Overrides
-You can specify some settings that will override settings in all queries in the test
+  ```
+  test_name: drop results sample
+  target:
+      api_server:  api.rs2.usw2.rockset.com
+  query_sets:
+      - name: samples
+        queries:
+          - name: Count 1
+            sql: >+
+              SELECT
+                  *
+              FROM 
+                  _events
+            drop_results: True
+  ```
+### Target Options
+- `execution_mode`
 
-- Drop results
+    Tests can be executed in one of the following modes: (default =  serial)
+    - serial - the queries in the query set are executed in order, waiting for each to complete before executing the next
+    - parallel - all queries in the query set are invoked simultaneously, waiting for all to finish before concluding the test
+    
+    ```
+  target:
+      api_server:  api.rs2.usw2.rockset.com
+      execution_mode: serial
+    ```
 
-You can cause all queries to drop their results and avoid the time of returning the result set to the client over the network.  This function is currently unsupported for Query Lambdas.
+- `overrides`
+  You can specify some settings that will override settings in all queries in the test
 
-```
-target:
-    api_server:  api.rs2.usw2.rockset.com
-    overrides:
-		drop_results
-```
+  - `drop_results`
 
-```
+    You can cause all queries to drop their results and avoid the time of returning the result set to the client over the network.  This function is not currently supported for Query Lambdas.
+
+    ```
+    target:
+        api_server:  api.rs2.usw2.rockset.com
+        overrides:
+        drop_results
+    ```
 
 ## Limitations
 - rockset-load is currently only designed to run on a single machine. It does create separate processes to run concurrent queries, but you should ensure that your client machine has sufficient resources to invoke the queries.

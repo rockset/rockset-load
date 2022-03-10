@@ -1,7 +1,7 @@
-import os, yaml, requests, time, uuid, csv
+import os, yaml, requests, uuid, csv
 import argparse
-import numpy as np
-from multiprocessing.pool import Pool
+
+from executors import ParallelQSExecutor, SerialQSExecutor
 from dotenv import load_dotenv
 from columnar import columnar
 from click import style
@@ -93,121 +93,22 @@ def load_config(options):
 
     return config
 
-def run_queryset(target, query_set, query_set_num):
-    results = {}
-    query_count = len(query_set['queries'])
-    query_results = [None] * query_count
-    with Pool(processes=len(query_set['queries'])) as pool:
-        tasks = []
-        for x in range(0, query_count):
-            args = []
-            args.append(x + 1)   # query_num
-            args.append(0)       # user_num
-            args.append(target)  # target
-            args.append(query_set['queries'][x])  # query
+def run_queryset(target, query_set):
 
-            task = pool.apply_async(run_query, args)
-            tasks.append(task)
-        
-        pool.close()
-        pool.join()
-
-        for task in tasks:
-            result = task.get()
-            offset = result['query_num']
-            query_results[offset -1] = result
-    
-    results['query_results'] = query_results
-    results['query_set_name'] = query_set['name']
-    results['query_set_num'] = query_set_num
-    return results
-
-def run_query(query_num, user_num, target, query):
-
-    drop_results = False
-    if 'overrides' in target:
-        overrides = target['overrides']
-        if overrides != None:
-            if 'drop_results' in overrides:
-                drop_results = True
-
-    result = {}
-    result['query_num'] = query_num
-    if 'name' in query:
-        result['name'] = query['name']
+    if 'execution_mode' in target:
+        mode = target['execution_mode']
     else:
-        result['name'] = 'unnamed'
+        mode = 'serial'
 
-    # Run the query
-    payload = {}
-    
-    if 'lambda' in query:
-
-        qlURL = query['lambda']
-        if qlURL[0] != '/':
-            qlURL = '/' + qlURL
-
-        if 'parameters' in query:
-            payload['parameters'] = query['parameters']
-
-        if drop_results:
-            print('Warning: drop results is not currently supported when using query lambdas')
-
-        start = time.perf_counter()
-        qryResopnse = requests.post(
-            'https://' + target['api_server'] + qlURL,
-            json=payload,
-            headers={'Authorization': 'ApiKey ' + target['api_key'] ,'Content-Type': 'application/json' })
-        end = time.perf_counter()
-    elif 'sql' in query:
-        sql = {}
-        sql['query'] = query['sql']
-        if ('drop_results' in query and query['drop_results']) or drop_results:
-            baseQuery = sql['query'].rstrip()
-            if baseQuery[-1] == ';':
-                baseQuery = baseQuery[:-1]
-            sql['query'] = baseQuery + ' HINT(final_aggregator_drop_results=true)'
-        if 'parameters' in query:
-            sql['parameters'] = query['parameters']
-        if 'paginate' in query:
-            sql['paginate'] = query['paginate']
-        if 'initial_paginate_response_doc_count' in query:       
-            sql['initial_paginate_response_doc_count'] = query['initial_paginate_response_doc_count']
-
-        payload['sql'] = sql
-
-        start = time.perf_counter()
-        qryResopnse = requests.post(
-            'https://' + target['api_server'] + '/v1/orgs/self/queries',
-            json=payload,
-            headers={'Authorization': 'ApiKey ' + target['api_key'] ,'Content-Type': 'application/json' })
-        end = time.perf_counter()
+    if mode == 'parallel':
+        executor =  ParallelQSExecutor(target, query_set)
+    elif mode == 'serial':
+        executor =  SerialQSExecutor(target, query_set)
     else:
-        result['status'] = 'invalid'
-        result['message'] = 'Query definition has neither lambda or sql specified'
-        return result
+        print(f"Unexpected query set execution mode {mode}")
+        return None
 
-    if qryResopnse.status_code == 408:
-        result['status'] = 'timeout'
-    elif qryResopnse.status_code == 429:
-        result['status'] = 'exhausted'
-    elif qryResopnse.status_code != 200:
-        result['status'] = 'error'
-        result['message'] = f'{qryResopnse.reason}. {qryResopnse.text}'
-    else:
-        result['status'] = 'success'
-        result['round_trip_ms'] = round((end - start) * 1000)
-        response_data = qryResopnse.json()
-        result['server_ms'] = response_data['stats']['elapsed_time_ms']
-        result['queued_ns'] = round(response_data['stats']['throttled_time_micros'])
-        result['query_ms'] = round(result['server_ms'] - (result['queued_ns'] /1000))
-        result['network_ms'] = result['round_trip_ms'] - result['server_ms']
-        if drop_results:
-          result['row_count'] = 'dropped'
-        else:
-          result['row_count'] = len(response_data['results'])
-
-    return result
+    return executor.run()
 
 def obfuscate_apikey(config):
     # We obfuscate the apikey once we are done executing any queries to prevent it from being leaked in any reports
@@ -217,7 +118,7 @@ def obfuscate_apikey(config):
 def display_qs_results(config, results):
 
     # Display the individual query results
-    headers = ['Query #', 'Name', 'Status', 'Total (ms)', 'Query (ms)', 'Queued (ms)', 'Network (ms)', 'Rows', 'Error']
+    headers = ['Test','Q Set Name', 'Q Set #', 'Status', 'Total (ms)', 'Query (ms)', 'Queued (ms)', 'Network (ms)', 'Rows', 'Error']
     patterns = [
       ('error', lambda text: style(text, fg='red')),
       ('success', lambda text: style(text, fg='green')),
@@ -227,8 +128,9 @@ def display_qs_results(config, results):
     data = []
     for result in results['query_results']:
         line = []
-        line.append(result['query_num'])
+        line.append(config['test_name'])
         line.append(result['name'])
+        line.append(result['query_num'])
         line.append(result['status'])
         if result['status'] == 'success':
             line.append(result['round_trip_ms'])
@@ -291,8 +193,6 @@ def summarize_qs_results(config, results):
                 warnings.append(warning)
     
     return {
-        'qs_name': results['query_set_name'],
-        'qs_num': results['query_set_num'],
         'total_ms': total,
         'query_ms': query,
         'queued_ms': queued,
@@ -304,7 +204,7 @@ def summarize_qs_results(config, results):
 def display_qs_summary(config, summary):
     # Display the test parameters
     headers = ['Test', 'Started', 'Clean', 'Total (ms)', 'Query (ms)', 'Queued (ms)', 'Network (ms)', 'VI', 'Agg Par', 'CQEL', 'CQL']
-    justify = ['l','c','c', 'r', 'r', 'r', 'r', 'r', 'r', 'r']
+    justify = ['l', 'r', 'r', 'r', 'r', 'r', 'r', 'r']
     patterns = [
       ('False', lambda text: style(text, fg='red')),
       ('True', lambda text: style(text, fg='green'))
@@ -414,7 +314,7 @@ def log_qs_summary(options, config, summary):
     file_exists = os.path.exists(file_path)
     if not file_exists:
         headers = [
-            'test_name', 'run_id','test_start','qs_name', 'qs_num', 'clean', 'total_ms', 'query_ms', 'queued_ms', 'network_ms',
+            'test_name', 'run_id','test_start', 'clean', 'total_ms', 'query_ms', 'queued_ms', 'network_ms',
             'vi_size', 'agg_par', 'cqel', 'cel'
         ]
         with open(file_path, 'wt') as new_summary:
@@ -424,7 +324,7 @@ def log_qs_summary(options, config, summary):
     test_name = config['test_name']
     run_id = config['stats']['run_id']
     test_start = config['stats']['test_start']
-    query_set_num = summary['qs_num']
+  
 
     # Add detail records to the details file
     with open(file_path, 'at') as new_details:
@@ -433,8 +333,6 @@ def log_qs_summary(options, config, summary):
         line.append(test_name)
         line.append(run_id)
         line.append(test_start)
-        line.append(summary['qs_name'])
-        line.append(summary['qs_num'])
         line.append(summary['clean'])
         line.append(summary['total_ms'])
         line.append(summary['query_ms'])
@@ -448,12 +346,14 @@ def log_qs_summary(options, config, summary):
         writer.writerow(line)
 
 
+
+
 if __name__ == "__main__":
     options = parse_args()
     config = load_config(options)
     verbose = options['verbose']
     log_output = options['log_output']
-    query_results = run_queryset(config['target'], config['query_set'][0], 1)
+    query_results = run_queryset(config['target'], config['queries'])
     obfuscate_apikey(config)
     query_set_summary = summarize_qs_results(config, query_results)
     if verbose:
